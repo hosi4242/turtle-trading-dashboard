@@ -79,8 +79,10 @@ async function getAccessToken(env: Env): Promise<string> {
         Number(expiryText.slice(12, 14)),
       )
     : Date.now() + 50 * 60 * 1000;
+  // Kiwoom's expires_dt is Korean local time (KST, UTC+09:00).
+  const expiryUtc = expiryText.length === 14 ? expiry - 9 * 60 * 60 * 1000 : expiry;
 
-  cachedToken = { value: token, expiresAt: expiry };
+  cachedToken = { value: token, expiresAt: expiryUtc };
   return token;
 }
 
