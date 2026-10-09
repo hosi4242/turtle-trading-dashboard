@@ -10,7 +10,7 @@ Allowed codes: Samsung Electronics (`005930`), SK Hynix (`000660`), and Hyundai 
 
 ## Cloudflare configuration
 
-The Worker entrypoint is `src/worker.ts`; `wrangler.jsonc` configures the static Vite build from `dist/` and routes the API through the Worker.
+The Worker entrypoint is `src/worker.ts`; `wrangler.jsonc` configures the static Vite build from `dist-demo/` to match the repository's `npm run build:demo` command, and routes the API through the Worker.
 
 In the target Worker, create **Secrets** (not plain Variables):
 - `KIWOOM_APP_KEY`
@@ -18,7 +18,7 @@ In the target Worker, create **Secrets** (not plain Variables):
 
 Use only mock-investment credentials. Never put keys in GitHub, source files, chat, or browser code.
 
-Before deploying, verify that the existing Cloudflare Worker is actually named `turtle-trading-dashboard` and that its build command produces `dist/` (normally `npm run build`). If the Worker name or build output differs, adjust `wrangler.jsonc` before deployment; do not deploy blindly.
+Before deploying, verify that the existing Cloudflare Worker is actually named `turtle-trading-dashboard` and that its build command is `npm run build:demo` (which produces `dist-demo/`). If either setting differs, adjust the Worker configuration before deployment; do not deploy blindly.
 
 ## Test
 
