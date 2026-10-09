@@ -36,10 +36,11 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function numberField(value: unknown): number | null {
+function numberField(value: unknown, absolute = false): number | null {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(String(value).replace(/,/g, "").replace(/^\+/, ""));
-  return Number.isFinite(parsed) ? Math.abs(parsed) : null;
+  if (!Number.isFinite(parsed)) return null;
+  return absolute ? Math.abs(parsed) : parsed;
 }
 
 async function getAccessToken(env: Env): Promise<string> {
@@ -130,13 +131,13 @@ export async function onRequestGet(context: {
     const quote: QuoteResult = {
       code,
       name: typeof payload.stk_nm === "string" ? payload.stk_nm : code,
-      price: numberField(payload.cur_prc),
+      price: numberField(payload.cur_prc, true),
       change: numberField(payload.pred_pre),
       changeRate: numberField(payload.flu_rt),
-      open: numberField(payload.open_pric),
-      high: numberField(payload.high_pric),
-      low: numberField(payload.low_pric),
-      volume: numberField(payload.trde_qty),
+      open: numberField(payload.open_pric, true),
+      high: numberField(payload.high_pric, true),
+      low: numberField(payload.low_pric, true),
+      volume: numberField(payload.trde_qty, true),
       asOf: new Date().toISOString(),
       source: "KIWOOM_MOCK_REST",
       mode: "DEMO",
