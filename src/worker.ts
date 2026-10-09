@@ -165,6 +165,13 @@ async function getQuote(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/api/kiwoom/config-status") {
+      return json({
+        worker: "turtle-trading-dashboard",
+        appKeyConfigured: Boolean(env.KIWOOM_APP_KEY?.trim()),
+        appSecretConfigured: Boolean(env.KIWOOM_APP_SECRET?.trim()),
+      });
+    }
     if (url.pathname === "/api/kiwoom/quote") return getQuote(request, env);
     return env.ASSETS.fetch(request);
   },
