@@ -15,15 +15,15 @@ type QuoteResult = {
   low: number | null;
   volume: number | null;
   asOf: string;
-  source: "KIWOOM_MOCK_REST";
-  mode: "DEMO";
+  source: "KIWOOM_REAL_REST";
+  mode: "REAL";
 };
 
 type CachedToken = { value: string; expiresAt: number };
 let cachedToken: CachedToken | undefined;
 const quoteCache = new Map<string, { value: QuoteResult; expiresAt: number }>();
 const ALLOWED_CODES = new Set(["005930", "000660", "005380"]);
-const MOCK_API = "https://mockapi.kiwoom.com";
+const KIWOOM_API = "https://api.kiwoom.com";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -47,7 +47,7 @@ async function getAccessToken(env: Env): Promise<string> {
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
   if (!env.KIWOOM_APP_KEY || !env.KIWOOM_APP_SECRET) throw new Error("SECRETS_NOT_CONFIGURED");
 
-  const response = await fetch(`${MOCK_API}/oauth2/token`, {
+  const response = await fetch(`${KIWOOM_API}/oauth2/token`, {
     method: "POST",
     headers: { "content-type": "application/json;charset=UTF-8" },
     body: JSON.stringify({
@@ -110,7 +110,7 @@ async function getQuote(request: Request, env: Env): Promise<Response> {
 
   try {
     const token = await getAccessToken(env);
-    const response = await fetch(`${MOCK_API}/api/dostk/stkinfo`, {
+    const response = await fetch(`${KIWOOM_API}/api/dostk/stkinfo`, {
       method: "POST",
       headers: {
         "content-type": "application/json;charset=UTF-8",
@@ -144,8 +144,8 @@ async function getQuote(request: Request, env: Env): Promise<Response> {
       low: numberField(payload.low_pric, true),
       volume: numberField(payload.trde_qty, true),
       asOf: new Date().toISOString(),
-      source: "KIWOOM_MOCK_REST",
-      mode: "DEMO",
+      source: "KIWOOM_REAL_REST",
+      mode: "REAL",
     };
 
     if (quote.price === null) return json({ error: "QUOTE_RESPONSE_UNRECOGNIZED" }, 502);
