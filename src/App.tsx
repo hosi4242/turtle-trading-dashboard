@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import {
-  Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Check,
+  Activity, AlertTriangle, ArrowUpRight, BarChart3, Check,
   CircleHelp, Clock3, Database, Gauge, LayoutDashboard, Plus, Search,
-  Settings, ShieldCheck, SlidersHorizontal, Trash2, X
+  Settings, ShieldCheck, SlidersHorizontal, X
 } from 'lucide-react'
 
 type PositionState = 'FLAT' | 'IN_POSITION'
