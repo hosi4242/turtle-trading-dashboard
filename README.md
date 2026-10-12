@@ -1,43 +1,39 @@
-# Turtle Trading Dashboard — v2.3.1 Mock UI
+# Turtle Trading Dashboard — v2.3.1
 
-첨부된 `Turtle_Trading_Dashboard_Final_Technical_Spec_v2_3_1_Kiwoom_FINAL.md`의 Phase 1~2 범위를 바탕으로 만든 프론트엔드 시현판입니다.
+이 저장소는 대시보드 프론트엔드와 Cloudflare Worker 기반 키움 REST API 연결 코드를 포함합니다. 프론트엔드에는 Mock 기준값이 남아 있을 수 있으므로, 실제 시세는 Worker의 시세 API 응답이 성공한 경우에만 실제 데이터로 취급해야 합니다. 주문 실행 기능은 제공하지 않습니다.
 
-## 현재 구현 범위
-- 대시보드 / 관심종목 / 상세분석 / 데이터 상태 / 설정 화면
-- 명세서의 삼성전자·SK하이닉스·현대차 Mock 가격 및 기준값
-- 상태 배지와 20일·55일 진입 시스템 선택
-- 수동 포지션 입력, 2N Stop 및 다음 Pyramid 가격 계산
-- 포지션 사이징 참고 계산과 자본 기준 실효 최대 Unit
-- 관심종목 샘플 추가·삭제 및 검색
-- 실제 시세가 아니라는 고정 배너와 주문 미실행 안전 문구
-- DEMO 빌드 시 별도 `dist-demo/` 출력
-
-## 실행 방법 (Windows)
-1. Node.js LTS를 설치합니다.
-2. 압축을 푼 폴더에서 명령 프롬프트 또는 PowerShell을 엽니다.
-3. 다음 명령을 순서대로 실행합니다.
-
+## 로컬 실행
 ```bash
 npm install
 npm run dev
 ```
 
-터미널에 표시되는 로컬 주소를 브라우저에서 엽니다.
-
 ## 빌드
 ```bash
 npm run build
-npm run build:demo
 ```
 
-- `npm run build`: 일반 Mock 프론트 `dist/`
-- `npm run build:demo`: Cloudflare Pages용 DEMO 정적 빌드 `dist-demo/`
+빌드 출력 폴더는 `dist/` 하나로 통일했습니다. `wrangler.jsonc`의 Assets 디렉터리도 `./dist`를 사용하므로 빌드 출력과 배포 설정이 일치합니다.
 
-Cloudflare Pages DEMO 프로젝트 설정:
-- Build command: `npm run build:demo`
-- Build output directory: `dist-demo`
+## Cloudflare Workers Builds 설정
+- Production branch: 배포 검증을 마친 뒤 `main` 또는 승인된 브랜치 선택
+- Build command: `npm run build`
+- Deploy command: Wrangler 설정 파일을 사용해 자동 감지되도록 설정
+- Build output directory: `dist` (대시보드 UI에 별도 입력란이 있는 경우)
+- Worker entry point: `src/worker.ts` (`wrangler.jsonc`에서 지정)
 
-## 중요 제한 사항
-이 패키지는 프론트엔드 Mock 시현판입니다. 키움 REST/실시간 API, FastAPI 백엔드, SQLite, SSE, 실시간 토큰 발급, 실제 종목 검색, 자동 백업·복구·보안 검사 및 Test A~Y 전체는 아직 구현되어 있지 않습니다. 데이터 상태 화면에 해당 항목을 미구현으로 표시합니다.
+## 런타임 Secrets
+Cloudflare Worker의 Production 런타임 Secret 이름:
+- `KIWOOM_APP_KEY`
+- `KIWOOM_APP_SECRET`
 
-실제 운영판을 만들기 전에는 명세서 §13의 공식 API Gate를 검증하고, 별도의 로컬 백엔드 구현과 보안·회귀 테스트를 진행해야 합니다. 이 화면은 투자 조언이나 주문 기능을 제공하지 않습니다.
+실제 Secret 값은 저장소, 코드, 로그 또는 문서에 기록하지 마세요. Secret 설정을 변경한 뒤에는 최신 배포 버전에서 런타임 설정 진단 API를 확인해야 합니다.
+
+## 진단 주소
+- 설정 진단: `/api/kiwoom/config-status`
+- 시세 조회: `/api/kiwoom/quote?code=005930`
+
+정상적인 설정 진단 응답은 두 설정 필드가 모두 `true`인 경우입니다. 실제 시세 조회는 키움 API 인증 및 종목 조회가 성공해야 정상 응답합니다. 진단 응답에 Secret 값 자체를 포함하지 마세요.
+
+## 안전 및 제한
+이 대시보드는 정보 확인용입니다. 자동 매매나 주문 실행 기능은 포함하지 않습니다. 실계좌 또는 실시간 데이터 사용 전에는 키움 REST API 공식 문서와 계정 권한을 확인하고, 오류 응답을 검증해야 합니다.
