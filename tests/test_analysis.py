@@ -55,6 +55,22 @@ class StockAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(result["turtle"]["nAtr20"], expected, places=8)
         self.assertAlmostEqual(result["technical"]["atr20"], expected, places=8)
 
+    def test_rsi_uses_wilder_smoothing(self) -> None:
+        result = analyze_stock(self.quote, self.bars)
+        changes = [
+            self.bars[index]["close"] - self.bars[index - 1]["close"]
+            for index in range(1, len(self.bars))
+        ]
+        gains = [max(change, 0.0) for change in changes]
+        losses = [max(-change, 0.0) for change in changes]
+        average_gain = sum(gains[:14]) / 14
+        average_loss = sum(losses[:14]) / 14
+        for gain, loss in zip(gains[14:], losses[14:]):
+            average_gain = ((average_gain * 13) + gain) / 14
+            average_loss = ((average_loss * 13) + loss) / 14
+        expected = 100.0 if average_loss == 0 else 100.0 - (100.0 / (1.0 + average_gain / average_loss))
+        self.assertAlmostEqual(result["technical"]["rsi14"], expected, places=8)
+
     def test_indicators_are_numeric_and_score_is_not_probability(self) -> None:
         result = analyze_stock(self.quote, self.bars)
         self.assertIsInstance(result["technical"]["rsi14"], float)
