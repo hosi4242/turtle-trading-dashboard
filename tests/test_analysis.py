@@ -37,6 +37,9 @@ class StockAnalysisTests(unittest.TestCase):
         self.assertEqual(result["turtle"]["system1Entry20High"], max(row["high"] for row in self.bars[-20:]))
         self.assertEqual(result["turtle"]["system2Entry55High"], max(row["high"] for row in self.bars[-55:]))
         self.assertEqual(result["turtle"]["system1Exit10Low"], min(row["low"] for row in self.bars[-10:]))
+        self.assertEqual(result["turtle"]["system2Exit20Low"], min(row["low"] for row in self.bars[-20:]))
+        self.assertEqual(result["turtle"]["lastCompletedBarDate"], self.bars[-1]["date"])
+        self.assertEqual(result["turtle"]["historyBars"], len(self.bars))
         self.assertEqual(result["turtle"]["status"], "ENTRY_READY")
 
     def test_atr_uses_wilder_smoothing(self) -> None:
