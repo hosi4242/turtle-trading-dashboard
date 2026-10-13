@@ -71,7 +71,7 @@ function savedCodes(): string[] {
   try {
     const parsed = JSON.parse(window.localStorage.getItem('turtle-v3-watchlist') || 'null')
     if (Array.isArray(parsed)) {
-      const codes = parsed.filter((code): code is string => typeof code === 'string' && /^\\d{6}$/.test(code))
+      const codes = parsed.filter((code): code is string => typeof code === 'string' && /^\d{6}$/.test(code))
       return [...new Set(codes)].slice(0, 10).length ? [...new Set(codes)].slice(0, 10) : DEFAULT_CODES
     }
   } catch { /* use defaults when browser storage is unavailable */ }
