@@ -173,11 +173,11 @@ async function getDailyBars(code: string, env: Env): Promise<Bar[]> {
   let cont = "N", next = "";
   const raw: Record<string, unknown>[] = [];
   for (let page = 0; page < 10; page++) {
-    const response = await fetch(\`\${KIWOOM_API}/api/dostk/chart\`, {
+    const response = await fetch(`${KIWOOM_API}/api/dostk/chart`, {
       method: "POST",
       headers: {
         "content-type": "application/json;charset=UTF-8",
-        authorization: \`Bearer \${token}\`,
+        authorization: `Bearer ${token}`,
         "api-id": "ka10081",
         "cont-yn": cont,
         "next-key": next,
@@ -230,7 +230,7 @@ function rsi(v: number[], n=14): number | null {
 }
 async function analyze(code: string, env: Env): Promise<Record<string, unknown>> {
   if (!/^\d{6}$/.test(code) || !ALLOWED_CODES.has(code)) throw new Error("UNSUPPORTED_SYMBOL");
-  const quoteResponse = await getQuote(new Request(\`https://worker.local/api/kiwoom/quote?code=\${code}\`), env);
+  const quoteResponse = await getQuote(new Request(`https://worker.local/api/kiwoom/quote?code=${code}`), env);
   const quote = await quoteResponse.json() as QuoteResult & { error?: string };
   if (!quoteResponse.ok || quote.error || quote.price == null) throw new Error(quote.error ?? "QUOTE_REQUEST_FAILED");
   const bars = await getDailyBars(code, env);
@@ -248,7 +248,7 @@ async function analyze(code: string, env: Env): Promise<Record<string, unknown>>
   const score=Math.round((parts.reduce((a,b)=>a+b,0)+parts.length)/(2*parts.length)*100);
   const asOf=quote.asOf;
   return {code,name:quote.name,quote,turtle:{system1Entry20High:e20,system2Entry55High:e55,system1Exit10Low:x10,system2Exit20Low:x20,nAtr20:atr,lastCompletedBarDate:bars[bars.length-1].date,historyBars:bars.length,status:quote.price>=e20?"ENTRY_READY":"WATCHING",statusBasis:"실제 현재가와 완료된 일봉 20일 고가 비교"},
-    chart:bars.slice(-60).map(b=>({date:\`\${b.date.slice(0,4)}-\${b.date.slice(4,6)}-\${b.date.slice(6)}\`,close:b.close})),
+    chart:bars.slice(-60).map(b=>({date:`${b.date.slice(0,4)}-${b.date.slice(4,6)}-${b.date.slice(6)}`,close:b.close})),
     technical:{trend,sma20:s20,sma50:s50,rsi14:r,macd,macdSignal:sig,atr20:atr,volumeAverage20:avol,volumeRatio20:vr},
     analysis:{score,scoreLabel:"규칙 기반 참고 점수(확률 아님)",horizons:{SHORT:"1~5거래일",MEDIUM:"2~4주",LONG:"3~12개월"},limitations:["수급·뉴스·공시·실적 데이터는 연결하지 않았습니다.","이 점수는 상승 확률이 아니며 매수·매도 권고가 아닙니다."]},
     dataQuality:{source:"KIWOOM_REAL_REST",mode:"PRODUCTION",asOf,completedDailyBars:bars.length,mockFallback:false}};
@@ -278,7 +278,7 @@ export default {
      }
      return json({error:"METHOD_NOT_ALLOWED"},405);
    }
-   const stockMatch=path.match(/^\\/api\\/stock\\/(\\d{6})$/);
+   const stockMatch=path.match(/^\/api\/stock\/(\d{6})$/);
    if(stockMatch && request.method==="GET") { try { return json(await analyze(stockMatch[1],env)); } catch(e) { const message=e instanceof Error?e.message:"DATA_REQUEST_FAILED"; return json({detail:{code:message,message:"실제 시세 또는 일봉 조회에 실패했습니다."}},message==="UNSUPPORTED_SYMBOL"?400:502); } }
    return env.ASSETS.fetch(request);
  }
