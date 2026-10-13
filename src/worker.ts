@@ -173,7 +173,7 @@ async function getQuote(request: Request, env: Env): Promise<Response> {
         : error.providerMessage;
       const safeMessage = redact(env.KIWOOM_APP_KEY)
         .split(env.KIWOOM_APP_SECRET ?? "\u0000").join("[redacted]")
-        .replace(/[\\r\\n\\t]/g, " ")
+        .replaceAll("\r", " ").replaceAll("\n", " ").replaceAll("\t", " ")
         .slice(0, 160);
       return json({
         error: "KIWOOM_TOKEN_REQUEST_FAILED",
