@@ -55,7 +55,7 @@ class StockAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(result["turtle"]["nAtr20"], expected, places=8)
         self.assertAlmostEqual(result["technical"]["atr20"], expected, places=8)
 
-    def test_indicators_are_numeric_and_score_is_not_probability(self) -> None
+    def test_indicators_are_numeric_and_score_is_not_probability(self) -> None:
         result = analyze_stock(self.quote, self.bars)
         self.assertIsInstance(result["technical"]["rsi14"], float)
         self.assertGreaterEqual(result["analysis"]["score"], 0)
