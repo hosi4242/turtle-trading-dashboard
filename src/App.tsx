@@ -1,134 +1,286 @@
-import { useEffect, useState } from 'react'
-import {
-  Activity, AlertTriangle, ArrowUpRight, BarChart3, Check,
-  CircleHelp, Clock3, Database, Gauge, LayoutDashboard, Plus, Search,
-  Settings, ShieldCheck, SlidersHorizontal, X
-} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
-type PositionState = 'FLAT' | 'IN_POSITION'
-type Status = 'WATCHING' | 'ENTRY_READY' | 'HOLDING' | 'PYRAMID_READY' | 'EXIT_READY' | 'CALC_ERROR'
-type Stock = {
-  code: string; name: string; price: number; change: number; entry20: number;
-  entry55: number; exit10: number; exit20: number; n: number; position: PositionState;
-  firstEntry: number | null; entryN: number | null; units: number;
-  lastFill: number | null; history: number[]
+type Quote = {
+  code: string
+  name: string
+  price: number
+  change: number | null
+  changeRate: number | null
+  asOf: string
+  source: string
 }
-type Page = 'dashboard' | 'watchlist' | 'detail' | 'health' | 'settings'
+type StockAnalysis = {
+  code: string
+  chart: { date: string; close: number }[]
+  name: string
+  quote: Quote
+  turtle: {
+    system1Entry20High: number
+    system2Entry55High: number
+    system1Exit10Low: number
+    system2Exit20Low: number
+    nAtr20: number
+    lastCompletedBarDate: string
+    historyBars: number
+    status: string
+    statusBasis: string
+  }
+  technical: {
+    trend: string
+    sma20: number | null
+    sma50: number | null
+    rsi14: number | null
+    macd: number
+    macdSignal: number
+    atr20: number
+    volumeAverage20: number | null
+    volumeRatio20: number | null
+  }
+  analysis: {
+    score: number
+    scoreLabel: string
+    horizons: Record<string, string>
+    limitations: string[]
+  }
+  dataQuality: {
+    source: string
+    mode: string
+    asOf: string
+    completedDailyBars: number
+    mockFallback: boolean
+  }
+}
+type ApiFailure = { code: string; error: string; message: string }
+type Health = {
+  version: string
+  mode: string
+  backend: string
+  credentials: { appKeyConfigured: boolean; appSecretConfigured: boolean }
+  mockFallback: boolean
+  ordersEnabled: boolean
+}
 
-const initialRows: Stock[] = [
-  { code:'005930', name:'삼성전자', price:72300, change:0.83, entry20:73000, entry55:75800, exit10:69800, exit20:70400, n:1850, position:'FLAT', firstEntry:null, entryN:null, units:0, lastFill:null, history:[68500,69100,68700,69900,70400,69800,71100,70600,71800,72300,71600,72100,72700,71900,72300,72900,72400,72000,72600,72300] },
-  { code:'000660', name:'SK하이닉스', price:235000, change:1.29, entry20:231500, entry55:238000, exit10:227000, exit20:229000, n:6200, position:'FLAT', firstEntry:null, entryN:null, units:0, lastFill:null, history:[218000,221000,219000,224000,222000,226000,229000,227000,231000,233000,229000,234000,232000,236000,231000,238000,234000,232000,237000,235000] },
-  { code:'005380', name:'현대차', price:241500, change:-0.41, entry20:245000, entry55:252000, exit10:236000, exit20:239000, n:5100, position:'FLAT', firstEntry:null, entryN:null, units:0, lastFill:null, history:[247000,244000,246000,243000,241000,245000,242000,240000,243000,239000,242000,244000,241000,243000,240000,242000,245000,242000,240000,241500] }
-]
-const fmt = (n:number) => Math.round(n).toLocaleString('ko-KR')
-const money = (n:number) => fmt(n) + '원'
-const statusText: Record<Status,string> = { WATCHING:'관찰', ENTRY_READY:'진입 기준 도달', HOLDING:'보유 중', PYRAMID_READY:'추가매수 구간', EXIT_READY:'청산 기준 도달', CALC_ERROR:'계산 불가' }
-const statusClass: Record<Status,string> = { WATCHING:'watch', ENTRY_READY:'entry', HOLDING:'holding', PYRAMID_READY:'pyramid', EXIT_READY:'exit', CALC_ERROR:'error' }
-function getStatus(s:Stock, system:20|55, maxUnits:number):Status {
-  if (s.position==='FLAT') return s.price >= (system===20?s.entry20:s.entry55) ? 'ENTRY_READY':'WATCHING'
-  if (!s.firstEntry || !s.entryN || !s.lastFill || s.units<1) return 'CALC_ERROR'
-  if (s.price<=Math.max(s.lastFill-2*s.entryN,system===20?s.exit10:s.exit20)) return 'EXIT_READY'
-  if (s.units<maxUnits && s.price>=s.lastFill+.5*s.entryN) return 'PYRAMID_READY'
-  return 'HOLDING'
+const fmt = (value: number | null | undefined, digits = 0) =>
+  value == null || !Number.isFinite(value) ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: digits, minimumFractionDigits: digits })
+const money = (value: number | null | undefined) => value == null ? '—' : fmt(value) + '원'
+const pct = (value: number | null | undefined) => value == null ? '—' : (value > 0 ? '+' : '') + fmt(value, 2) + '%'
+const dateLabel = (value?: string) => value ? value.slice(0, 10).replace(/-/g, '.') : '—'
+
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { headers: { Accept: 'application/json', ...(init?.headers || {}) }, ...init })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const detail = body?.detail
+    const message = typeof detail === 'string' ? detail : detail?.message || detail?.code || 'API 요청에 실패했습니다.'
+    throw new Error(message)
+  }
+  return body as T
 }
-function Badge({status}:{status:Status}) { return <span className={'badge '+statusClass[status]}><i/>{statusText[status]}</span> }
-function Chart({row,system,maxUnits,period}:{row:Stock;system:20|55;maxUnits:number;period:string}) {
-  const exitValue=system===20?row.exit10:row.exit20
-  const sampleCount=period==='3개월'?5:period==='6개월'?10:row.history.length
-  const values=[...row.history.slice(-sampleCount),row.price], min=Math.min(...values,exitValue)*.985, max=Math.max(...values,row.entry55)*1.012
-  const points=values.map((v,i)=>(i/(values.length-1)*760)+','+(180-(v-min)/(max-min)*150)).join(' ')
-  const lines=[{label:'55D 돌파선',value:row.entry55,color:'#8b5cf6'},{label:system+'D 진입선',value:system===20?row.entry20:row.entry55,color:'#d97706'},{label:'현재가',value:row.price,color:'#2563eb'},{label:system===20?'10D 저가(청산)':'20D 저가(청산)',value:exitValue,color:'#64748b'}]
-  if(row.position==='IN_POSITION'&&row.entryN&&row.lastFill){lines.push({label:'2N Stop',value:row.lastFill-2*row.entryN,color:'#dc2626'});if(row.units<maxUnits)lines.push({label:'Next Pyramid',value:row.lastFill+.5*row.entryN,color:'#7c3aed'})}
-  return <div className="chart-wrap"><div className="chart-legend">{lines.map(l=><span key={l.label}><i style={{background:l.color}}/>{l.label}</span>)}</div><svg className="price-chart" viewBox="0 0 780 210" role="img" aria-label={row.name+' 샘플 가격 차트'}>{[30,70,110,150,190].map(y=><line key={y} x1="0" y1={y} x2="760" y2={y} stroke="#edf0f4" strokeDasharray="3 5"/>)}{lines.map(l=><g key={l.label}><line x1="0" x2="760" y1={180-(l.value-min)/(max-min)*150} y2={180-(l.value-min)/(max-min)*150} stroke={l.color} strokeDasharray={l.label==='현재가'?'0':'5 5'} strokeWidth="1.4"/><text x="768" y={Math.max(12,Math.min(198,176-(l.value-min)/(max-min)*150))} fontSize="10" fill={l.color} textAnchor="end">{fmt(l.value)}</text></g>)}<polyline points={points} fill="none" stroke="#1d4ed8" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/><circle cx="760" cy={180-(row.price-min)/(max-min)*150} r="4" fill="#1d4ed8" stroke="white" strokeWidth="2"/></svg><div className="chart-foot"><span>{period} 샘플 구간 · 날짜 데이터 아님</span><span>가격 단위: 원 · {row.code} API 응답 여부는 상단 상태 확인</span></div></div>
+
+function PriceChart({ points }: { points: { date: string; close: number }[] }) {
+  if (points.length < 2) return <div className="empty-state">차트 데이터가 부족합니다.</div>
+  const values = points.map(point => point.close)
+  const minimum = Math.min(...values)
+  const maximum = Math.max(...values)
+  const span = Math.max(1, maximum - minimum)
+  const polyline = points.map((point, index) => {
+    const x = index / (points.length - 1) * 760
+    const y = 170 - (point.close - minimum) / span * 140
+    return x.toFixed(1) + ',' + y.toFixed(1)
+  }).join(' ')
+  return <div className="real-chart">
+    <svg viewBox="0 0 780 190" role="img" aria-label="실제 일봉 종가 차트">
+      {[30, 65, 100, 135, 170].map(y => <line key={y} x1="0" x2="760" y1={y} y2={y} stroke="#e8edf5" strokeDasharray="3 5" />)}
+      <polyline points={polyline} fill="none" stroke="#3159d9" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+    <div className="chart-axis"><span>{dateLabel(points[0].date)}</span><span>{money(maximum)} · 최고</span><span>{dateLabel(points[points.length - 1].date)}</span></div>
+  </div>
 }
+
+function StatusPill({ status }: { status: string }) {
+  const label = status === 'ENTRY_READY' ? '진입 기준 도달' : status === 'WATCHING' ? '관찰' : status
+  return <span className={'status-pill ' + (status === 'ENTRY_READY' ? 'status-entry' : 'status-watch')}>{label}</span>
+}
+
 export default function App() {
-  const [page,setPage]=useState<Page>('dashboard'), [rows,setRows]=useState<Stock[]>(initialRows), [selected,setSelected]=useState('005930')
-  const [system,setSystem]=useState<20|55>(20), [capital,setCapital]=useState('50000000'), [risk,setRisk]=useState('1.0'), [maxUnits,setMaxUnits]=useState('4')
-  const [query,setQuery]=useState(''), [period,setPeriod]=useState('6개월'), [sim,setSim]=useState(false)
-  const [notice,setNotice]=useState(''), [showAdd,setShowAdd]=useState(false), [newCode,setNewCode]=useState(''), [newName,setNewName]=useState('')
-  const [draft,setDraft]=useState({state:'FLAT' as PositionState,firstEntry:'',entryN:'',units:'0',lastFill:''})
-  const [quoteStatus,setQuoteStatus]=useState<'checking'|'connected'|'error'>('checking')
-  const [quoteMessage,setQuoteMessage]=useState('시세 API 연결 확인 중')
-  const [quoteUpdatedAt,setQuoteUpdatedAt]=useState<string|null>(null)
-  const [quoteError,setQuoteError]=useState<string|null>(null)
-  const demo=typeof __DEMO_MODE__!=='undefined'&&__DEMO_MODE__
-  const row=rows.find(r=>r.code===selected)||rows[0], maxUnitNumber=Math.max(1,Number(maxUnits)||1)
-  const statusFor=(s:Stock)=>getStatus(s,system,maxUnitNumber)
-  const shownRows=rows.filter(s=>(s.name+' '+s.code).toLowerCase().includes(query.toLowerCase()))
-  const riskAmount=(Number(capital)||0)*(Number(risk)||0)/100, unitQty=row.n>0?Math.floor(riskAmount/row.n):0, unitValue=unitQty*row.price
-  const effectiveUnits=unitValue>0?Math.min(maxUnitNumber,Math.floor((Number(capital)||0)/unitValue)):0
-  const stop=row.position==='IN_POSITION'&&row.entryN&&row.lastFill?row.lastFill-2*row.entryN:null
-  const next=row.position==='IN_POSITION'&&row.entryN&&row.lastFill&&row.units<maxUnitNumber?row.lastFill+.5*row.entryN:null
-  const exitLine=stop===null?null:Math.max(stop,system===20?row.exit10:row.exit20)
-  const [localClock,setLocalClock]=useState(()=>new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}))
-  useEffect(()=>{const updateClock=()=>setLocalClock(new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}));updateClock();const timer=window.setInterval(updateClock,1000);return()=>window.clearInterval(timer)},[])
-  useEffect(()=>{
-    let active=true
-    const refreshQuotes=async()=>{
-      const codes=['005930','000660','005380']
-      setQuoteStatus('checking')
-      setQuoteMessage('키움 시세 조회 중')
-      const results=await Promise.all(codes.map(async code=>{
-        try{
-          const response=await fetch('/api/kiwoom/quote?code='+encodeURIComponent(code),{cache:'no-store'})
-          const data=await response.json() as {code?:string;name?:string;price?:number|null;changeRate?:number|null;asOf?:string;source?:string;mode?:string;error?:string}
-          if(!response.ok||typeof data.price!=='number'||!Number.isFinite(data.price)||data.price<=0)throw new Error(data.error||'QUOTE_REQUEST_FAILED')
-          return {ok:true as const,code,name:data.name,price:data.price,changeRate:typeof data.changeRate==='number'?data.changeRate:null,asOf:data.asOf,source:data.source,mode:data.mode}
-        }catch(error){
-          return {ok:false as const,code,error:error instanceof Error?error.message:'QUOTE_REQUEST_FAILED'}
-        }
-      }))
-      if(!active)return
-      const good=results.filter((r):r is Extract<typeof r,{ok:true}>=>r.ok)
-      if(good.length){
-        setRows(prev=>prev.map(stock=>{
-          const q=good.find(item=>item.code===stock.code)
-          return q?{...stock,name:q.name||stock.name,price:q.price,change:q.changeRate??stock.change}:stock
-        }))
-        setQuoteUpdatedAt(new Date().toLocaleString('ko-KR',{hour12:false}))
+  const [health, setHealth] = useState<Health | null>(null)
+  const [rows, setRows] = useState<StockAnalysis[]>([])
+  const [failures, setFailures] = useState<ApiFailure[]>([])
+  const [selectedCode, setSelectedCode] = useState('005930')
+  const [customCode, setCustomCode] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [lastRefresh, setLastRefresh] = useState('')
+
+  const selected = useMemo(() => rows.find(row => row.code === selectedCode) || rows[0] || null, [rows, selectedCode])
+
+  const loadWatchlist = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true)
+    setError('')
+    try {
+      const [healthResult, listResult] = await Promise.all([
+        api<Health>('/api/health'),
+        api<{ items: StockAnalysis[]; failures: ApiFailure[] }>('/api/watchlist')
+      ])
+      setHealth(healthResult)
+      setRows(listResult.items)
+      setFailures(listResult.failures || [])
+      if (listResult.items.length) {
+        setSelectedCode(current => listResult.items.some(item => item.code === current) ? current : listResult.items[0].code)
       }
-      const failures=results.filter((r)=>!r.ok)
-      if(good.length===codes.length){
-        setQuoteStatus('connected')
-        setQuoteMessage('키움 실전투자 시세 API 응답 정상')
-        setQuoteError(null)
-      }else if(good.length>0){
-        setQuoteStatus('error')
-        setQuoteMessage('일부 종목만 조회됨')
-        setQuoteError(failures.map(item=>item.code+': '+('error' in item?item.error:'')).join(' · '))
-      }else{
-        setQuoteStatus('error')
-        setQuoteMessage('키움 시세 조회 실패')
-        setQuoteError(failures.map(item=>item.code+': '+('error' in item?item.error:'')).join(' · '))
-      }
+      setLastRefresh(new Date().toLocaleString('ko-KR', { hour12: false }))
+      if (!listResult.items.length) setError(listResult.failures?.[0]?.message || '실제 키움 데이터를 가져오지 못했습니다.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '로컬 API에 연결할 수 없습니다.')
+    } finally {
+      setLoading(false)
     }
-    void refreshQuotes()
-    const timer=window.setInterval(()=>void refreshQuotes(),30000)
-    return()=>{active=false;window.clearInterval(timer)}
-  },[])
-  const setRow=(code:string,patch:Partial<Stock>)=>setRows(prev=>prev.map(s=>s.code===code?{...s,...patch}:s))
-  const openDetail=(s:Stock)=>{setSelected(s.code);setDraft({state:s.position,firstEntry:s.firstEntry?.toString()||'',entryN:s.entryN?.toString()||'',units:String(s.units),lastFill:s.lastFill?.toString()||''});setPage('detail')}
-  const savePosition=()=>{const state=draft.state,first=Number(draft.firstEntry),n=Number(draft.entryN),units=Number(draft.units),fill=Number(draft.lastFill);if(state==='IN_POSITION'){if(![first,n,units,fill].every(Number.isFinite)||first<=0||n<=0||fill<=0||!Number.isInteger(units)||units<1){setNotice('보유 상태에서는 최초 진입가·N·최근 체결가는 양수, Unit은 1 이상의 정수로 입력하세요.');return}if(units>maxUnitNumber){setNotice('현재 설정된 최대 Unit('+maxUnitNumber+')을 초과할 수 없습니다. 설정을 확인하거나 Unit 수를 줄이세요.');return}}setRow(row.code,{position:state,firstEntry:state==='FLAT'?null:first,entryN:state==='FLAT'?null:n,units:state==='FLAT'?0:units,lastFill:state==='FLAT'?null:fill});setNotice('수동 포지션 입력을 저장했습니다. 실제 계좌 잔고와 자동 연동되지 않습니다.')}
-  const removeSymbol=(code:string)=>{if(rows.length<=1){setNotice('관심종목은 최소 1개 이상 유지해야 합니다.');return}const target=rows.find(s=>s.code===code);if(!target)return;setRows(prev=>prev.filter(s=>s.code!==code));if(selected===code){const nextRow=rows.find(s=>s.code!==code);if(nextRow){setSelected(nextRow.code);setDraft({state:nextRow.position,firstEntry:nextRow.firstEntry?.toString()||'',entryN:nextRow.entryN?.toString()||'',units:String(nextRow.units),lastFill:nextRow.lastFill?.toString()||''})}}setNotice(target.name+' 샘플 종목을 관심목록에서 제거했습니다.')}
-  const addSymbol=()=>{const code=newCode.trim(),name=newName.trim();if(!/^\d{6}$/.test(code)||!name){setNotice('종목코드 6자리와 종목명을 입력하세요.');return}if(rows.some(s=>s.code===code)){setNotice('이미 등록된 종목입니다.');return}if(rows.length>=20){setNotice('관심종목은 최대 20개까지 등록할 수 있습니다.');return}const added:Stock={code,name,price:10000,change:0,entry20:10500,entry55:11000,exit10:9000,n:300,position:'FLAT',firstEntry:null,entryN:null,units:0,lastFill:null,history:[9600,9800,9900,9700,10000],exit20:9500};setRows(prev=>[...prev,added]);setSelected(code);setShowAdd(false);setNewCode('');setNewName('');setNotice('샘플 종목을 추가했습니다. 실제 종목 검색/API와 연결된 기능은 아닙니다.')}
-  const nav=[{id:'dashboard' as Page,label:'대시보드',icon:LayoutDashboard},{id:'watchlist' as Page,label:'관심종목',icon:Activity},{id:'detail' as Page,label:'상세분석',icon:BarChart3},{id:'health' as Page,label:'데이터 상태',icon:Database},{id:'settings' as Page,label:'설정',icon:Settings}]
+  }, [])
+
+  useEffect(() => {
+    void loadWatchlist()
+    const timer = window.setInterval(() => void loadWatchlist(true), 60000)
+    return () => window.clearInterval(timer)
+  }, [loadWatchlist])
+
+  const addStock = async () => {
+    const code = customCode.trim()
+    if (!/^\d{6}$/.test(code)) {
+      setError('종목코드 6자리를 입력해 주세요.')
+      return
+    }
+    setLoading(true)
+    setError('')
+    try {
+      const stock = await api<StockAnalysis>('/api/watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })
+      setRows(previous => [stock, ...previous.filter(item => item.code !== code)])
+      setSelectedCode(code)
+      setCustomCode('')
+      setLastRefresh(new Date().toLocaleString('ko-KR', { hour12: false }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '종목 조회에 실패했습니다.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const statusText = error ? '데이터 확인 필요' : rows.length ? '실제 API 응답 확인됨' : '연결 확인 중'
+
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><div className="brand-mark"><Gauge size={22}/></div><div><div className="brand-title">Turtle<span>Trading</span></div><div className="brand-sub">DASHBOARD · v2.3.1</div></div></div><div className="top-actions"><span className="environment"><i className="live-dot"/>{demo?'실전 API 시세 연결':'실전 API 시세 연결'}</span><button className="icon-button" title="설정" onClick={()=>setPage('settings')}><Settings size={18}/></button><div className="avatar">TT</div></div></header>
-    {demo&&<div className="demo-banner"><AlertTriangle size={16}/> 현재가는 API 조회값이며, 차트 이력과 일부 터틀 기준값은 샘플입니다. 실제 주문은 실행되지 않습니다.</div>}
-    <div className="mock-banner"><span className="mock-pulse"/> {quoteStatus==='connected'?'KIWOOM REAL API 연결됨':quoteStatus==='checking'?'KIWOOM API 연결 확인 중':'KIWOOM API 연결 실패'} <span className="banner-sep">·</span> {quoteMessage}. 실제 주문은 실행되지 않습니다.</div>
-    <div className="layout"><aside className="sidebar"><div className="side-label">WORKSPACE</div>{nav.map(n=><button key={n.id} className={'nav-item '+(page===n.id?'active':'')} onClick={()=>setPage(n.id)}><n.icon size={17}/>{n.label}{n.id==='health'&&<span className="nav-status"/>}</button>)}<div className="sidebar-bottom"><div className="safe-card"><div className="safe-icon"><ShieldCheck size={17}/></div><strong>안전 우선 설계</strong><p>실제 계좌 연결 및 주문 실행 기능은 포함되어 있지 않습니다.</p><div className="safe-line"><Check size={13}/> 주문 미실행</div></div><div className="sidebar-version">TURTLE DASHBOARD<span>Version 2.3.1 · REST Quote</span></div></div></aside>
-      <main className="main-content">
-        {notice&&<div className="notice"><AlertTriangle size={15}/><span>{notice}</span><button onClick={()=>setNotice('')}><X size={14}/></button></div>}
-        <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line"/>SYSTEM MONITORING</div><h1>{({dashboard:'대시보드',watchlist:'관심종목',detail:'종목 상세분석',health:'연결 및 데이터 상태',settings:'계산 설정'} as Record<Page,string>)[page]}</h1><p>터틀 트레이딩 기준값을 확인하는 개인용 모니터링 화면입니다.</p></div><div className="heading-meta"><div className="date-chip"><Clock3 size={13}/> 로컬 시각 {localClock}</div><span className="update-time">{quoteUpdatedAt?'시세 조회 '+quoteUpdatedAt:'시세 조회 대기 중'} · 30초 간격 확인</span></div></div>
-        {(page==='dashboard'||page==='watchlist')&&<><div className="metric-grid"><div className="metric-card"><div className="metric-top"><span>관심종목</span><div className="metric-icon blue"><Activity size={17}/></div></div><div className="metric-value">{rows.length}<small> 종목</small></div><div className="metric-bottom"><span className="metric-note">현재 등록된 샘플 종목</span><span className="metric-tag">WATCHLIST</span></div></div><div className="metric-card"><div className="metric-top"><span>진입 기준 도달</span><div className="metric-icon green"><ArrowUpRight size={17}/></div></div><div className="metric-value">{rows.filter(s=>statusFor(s)==='ENTRY_READY').length}<small> 종목</small></div><div className="metric-bottom"><span className="metric-note">선택한 시스템 기준</span><span className="metric-tag">ENTRY</span></div></div><div className="metric-card"><div className="metric-top"><span>보유 포지션</span><div className="metric-icon amber"><BarChart3 size={17}/></div></div><div className="metric-value">{rows.filter(s=>s.position==='IN_POSITION').length}<small> 종목</small></div><div className="metric-bottom"><span className="metric-note">수동 입력 기준</span><span className="metric-tag amber-tag">POSITION</span></div></div><div className="metric-card"><div className="metric-top"><span>키움 시세 API</span><div className="metric-icon violet"><Database size={17}/></div></div><div className="metric-value status-value"><i className={'status-indicator '+(quoteStatus==='connected'?'ok':quoteStatus==='checking'?'off':'bad')}/>{quoteStatus==='connected'?'연결됨':quoteStatus==='checking'?'확인 중':'오류'}</div><div className="metric-bottom"><span className="metric-note">{quoteUpdatedAt?'최근 조회 '+quoteUpdatedAt:'시세 응답 대기 중'}</span><button className="text-action" onClick={()=>setPage('health')}>상태 보기 →</button></div></div></div>
-        <div className="warning-strip"><AlertTriangle size={16}/><span>샘플 데이터 전용 화면입니다. 신호와 계산값은 투자 판단 전에 반드시 별도로 검증하세요.</span></div></>}
-        {(page==='dashboard'||page==='watchlist')&&<section className="panel watch-panel"><div className="panel-heading"><div><h2>{page==='dashboard'?'관심종목 모니터':'관심종목 목록'}</h2><p>가격·진입 기준·N 값과 현재 상태</p></div><div className="panel-actions"><label className="search-box"><Search size={14}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="종목명 또는 코드"/></label><button className="primary-button" onClick={()=>setShowAdd(true)}><Plus size={14}/> 종목 추가</button></div></div><div className="table-wrap"><table><thead><tr><th>종목</th><th>현재가</th><th>등락률</th><th>20D 돌파</th><th>55D 돌파</th><th>N · ATR(20)</th><th>상태</th><th>상세</th><th>관리</th></tr></thead><tbody>{shownRows.map(s=><tr key={s.code} onClick={()=>openDetail(s)}><td><div className="stock-name"><span className="stock-avatar">{s.name.slice(0,1)}</span><span><strong>{s.name}</strong><small>{s.code}</small></span></div></td><td className="num">{fmt(s.price)}원</td><td className={s.change>=0?'up':'down'}>{s.change>=0?'+':''}{s.change.toFixed(2)}%</td><td className="num">{fmt(s.entry20)}</td><td className="num">{fmt(s.entry55)}</td><td className="num">{fmt(s.n)}</td><td><Badge status={statusFor(s)}/></td><td><button className="outline-button" onClick={e=>{e.stopPropagation();openDetail(s)}}>분석 열기 →</button></td><td><button className="outline-button" onClick={e=>{e.stopPropagation();removeSymbol(s.code)}} disabled={rows.length<=1}>제거</button></td></tr>)}</tbody></table>{shownRows.length===0&&<div className="empty-state">검색 결과가 없습니다.</div>}</div></section>}
-        {page==='dashboard'&&<div className="lower-grid"><section className="panel"><div className="panel-heading"><div><h2>가격 흐름 미리보기</h2><p>{row.name} · 샘플 시계열</p></div><button className="text-action" onClick={()=>openDetail(row)}>상세 보기 →</button></div><div className="preview-chart"><Chart row={row} system={system} maxUnits={maxUnitNumber} period={period}/></div></section><section className="panel"><div className="panel-heading"><div><h2>빠른 설정</h2><p>화면 계산에 적용됩니다.</p></div><SlidersHorizontal size={18} className="muted-icon"/></div><label className="field-label">진입 시스템<select value={system} onChange={e=>setSystem(Number(e.target.value) as 20|55)}><option value={20}>20일 돌파 / 10일 저가 청산</option><option value={55}>55일 돌파 / 20일 저가 청산</option></select></label><div className="calc-row"><span>운용자금</span><strong>{money(Number(capital)||0)}</strong></div><div className="calc-row"><span>1회 허용위험</span><strong>{money(riskAmount)}</strong></div><div className="calc-row"><span>선택 종목</span><strong>{row.name}</strong></div><button className="outline-button settings-link" onClick={()=>setPage('settings')}>계산 설정 전체 보기</button></section></div>}
-        {page==='detail'&&<div className="detail-layout"><section className="panel detail-main-panel"><div className="detail-title-row"><button className="back-link" onClick={()=>setPage('dashboard')}>← 대시보드</button><span className="live-pill"><span style={{background:quoteStatus==='connected'?'#18a36a':quoteStatus==='checking'?'#d97706':'#dc2626'}}/> {quoteStatus==='connected'?'KIWOOM REAL':quoteStatus==='checking'?'확인 중':'API 오류'}</span></div><div className="detail-stock-head"><div><div className="detail-name-line"><h2>{row.name}</h2><span className="code-label">{row.code}</span></div><div className="detail-price">{fmt(row.price)}<small>원</small><span className={row.change>=0?'up':'down'}>{row.change>=0?'+':''}{row.change.toFixed(2)}%</span></div></div><Badge status={statusFor(row)}/></div><div className="detail-metrics"><div><span>20D 돌파</span><strong>{fmt(row.entry20)}</strong></div><div><span>55D 돌파</span><strong>{fmt(row.entry55)}</strong></div><div><span>N · ATR(20)</span><strong>{fmt(row.n)}</strong></div><div><span>{system===20?'10D 저가(청산)':'10D 저가(참고)'}</span><strong>{fmt(row.exit10)}</strong></div></div><div className="chart-heading"><div><h3>가격 차트</h3><p>가격과 터틀 기준선</p></div><div className="segmented">{['3개월','6개월','1년'].map(p=><button key={p} className={period===p?'active':''} onClick={()=>setPeriod(p)}>{p}</button>)}</div></div><Chart row={row} system={system} maxUnits={maxUnitNumber} period={period}/><div className="detail-safety"><ShieldCheck size={18}/><div><strong>주문은 실행되지 않습니다.</strong><p>실제 매매는 현재가와 주문 조건을 직접 확인한 후 별도로 실행하세요.</p></div></div><div className="system-note"><CircleHelp size={15}/> System 1의 직전 거래 결과 필터는 구현하지 않았습니다. 사용자가 직접 판단해야 합니다.</div></section><div className="detail-side"><section className="panel calculation-panel"><div className="panel-heading"><div><h2>터틀 계산값</h2><p>현재 설정 기준</p></div><SlidersHorizontal size={18} className="muted-icon"/></div><div className="calc-row"><span>진입 시스템</span><strong>{system}일 시스템</strong></div><div className="calc-row"><span>유효 청산선</span><strong>{exitLine!==null?money(exitLine):'—'}</strong></div><div className="calc-row"><span>Stop (2N)</span><strong>{stop!==null?money(stop):'—'}</strong></div><div className="calc-row"><span>Next Pyramid</span><strong>{next!==null?money(next):'—'}</strong></div><div className="calc-note">{row.position==='FLAT'?'FLAT 상태에서는 Stop과 Pyramid를 표시하지 않습니다.':system===55?'시연용 20D 저가 기준으로 청산선을 계산합니다. 실제 데이터가 아닙니다.':'Stop은 최근 실제 체결가 기준으로 계산됩니다.'}</div></section><section className="panel position-panel"><div className="panel-heading"><div><h2>수동 포지션</h2><p>계좌와 자동 연동되지 않음</p></div></div><label className="field-label">포지션 상태<select value={draft.state} onChange={e=>setDraft(p=>({...p,state:e.target.value as PositionState}))}><option value="FLAT">미보유 (FLAT)</option><option value="IN_POSITION">보유 중</option></select></label><div className="field-grid"><label className="field-label">최초 진입가<input value={draft.firstEntry} onChange={e=>setDraft(p=>({...p,firstEntry:e.target.value}))} placeholder="예: 72300" disabled={draft.state==='FLAT'}/></label><label className="field-label">최초 진입 시 N<input value={draft.entryN} onChange={e=>setDraft(p=>({...p,entryN:e.target.value}))} placeholder="예: 1850" disabled={draft.state==='FLAT'}/></label><label className="field-label">현재 Unit<select value={draft.units} onChange={e=>setDraft(p=>({...p,units:e.target.value}))} disabled={draft.state==='FLAT'}>{[0,1,2,3,4,5,6,7,8].map(n=><option key={n} value={n}>{n} Unit</option>)}</select></label><label className="field-label">최근 체결가<input value={draft.lastFill} onChange={e=>setDraft(p=>({...p,lastFill:e.target.value}))} placeholder="실제 체결가" disabled={draft.state==='FLAT'}/></label></div><button className="primary-button full-button" onClick={savePosition}>포지션 입력 저장</button><p className="field-help">이론 가격을 체결가로 자동 입력하지 않습니다. 실제 체결가를 직접 입력하세요.</p></section><section className="panel sizing-panel"><div className="panel-heading"><div><h2>포지션 계산 참고</h2><p>설정한 운용자금 기준</p></div></div><div className="sizing-line"><span>운용자금</span><strong>{money(Number(capital)||0)}</strong></div><div className="sizing-line"><span>1회 허용위험</span><strong>{money(riskAmount)}</strong></div><div className="sizing-line"><span>1 Unit 수량</span><strong>{fmt(unitQty)}주</strong></div><div className="sizing-line"><span>1 Unit 금액</span><strong>{money(unitValue)}</strong></div><div className={'effective-box '+(effectiveUnits<maxUnitNumber?'warn':'')}><span>자본 기준 실효 최대 Unit</span><strong>{effectiveUnits} <small>/ 설정 {maxUnitNumber}</small></strong>{effectiveUnits<maxUnitNumber&&<p><AlertTriangle size={13}/> 설정 Unit 수가 자본을 초과할 수 있습니다.</p>}</div></section></div></div>}
-        {page==='health'&&<div className="health-layout"><section className="panel page-panel"><div className="panel-heading"><div><h2>연결 및 데이터 상태</h2><p>키움 실전투자 REST API의 응답 결과를 표시합니다. 실시간 스트리밍은 아닙니다.</p></div><span className={'health-state '+(quoteStatus==='error'?'health-state-error':'')}><span style={{background:quoteStatus==='connected'?'#18a36a':quoteStatus==='checking'?'#d97706':'#dc2626'}}/> {quoteStatus==='connected'?'API 응답 정상':quoteStatus==='checking'?'확인 중':'연결 실패'}</span></div><div className="health-list">{[{name:'Kiwoom REST API',desc:'실전투자 시세 조회 엔드포인트',value:quoteMessage,state:quoteStatus==='connected'?'ok':quoteStatus==='checking'?'off':'bad'},{name:'시세 갱신',desc:'브라우저에서 30초 간격으로 조회',value:quoteUpdatedAt||'아직 성공한 조회 없음',state:quoteUpdatedAt?'ok':'off'},{name:'Access Token',desc:'Worker가 토큰 발급을 요청',value:quoteStatus==='connected'?'시세 응답으로 간접 확인':'발급 여부 미확인',state:quoteStatus==='connected'?'ok':'off'},{name:'가격 데이터',desc:'대시보드 종목 가격에 API 응답 반영',value:quoteStatus==='connected'?'반영됨':'미확인',state:quoteStatus==='connected'?'ok':'off'},{name:'실시간 Feed',desc:'WebSocket 연속 시세 수신',value:'미구현 · REST 조회 방식',state:'off'},{name:'주문 실행',desc:'매수·매도 주문 기능',value:'미구현',state:'off'}].map(item=><div className="health-row" key={item.name}><div className={'health-icon '+item.state}><Database size={17}/></div><div className="health-copy"><strong>{item.name}</strong><span>{item.desc}</span></div><div className={'health-value '+item.state}>{item.value}</div></div>)}</div>{quoteError&&<div className="system-alert"><AlertTriangle size={16}/><span>조회 오류: {quoteError}</span></div>}<div className="health-controls"><div><strong>시세 조회</strong><p>버튼을 눌러 30초 주기 조회를 즉시 다시 시작하려면 페이지를 새로고침하세요.</p></div><button className="outline-button" onClick={()=>window.location.reload()}>다시 확인</button></div></section><section className="panel page-panel"><div className="panel-heading"><div><h2>시스템 체크</h2><p>로컬 운영 항목은 백엔드 구현 후 활성화됩니다.</p></div><ShieldCheck size={20} className="muted-icon"/></div><div className="check-list">{['바인딩 주소 127.0.0.1 검증','Host / Origin / 로컬 토큰 검사','시계 오차 점검','일일 DB 백업 및 복원','단일 인스턴스 락','API 시크릿 로그 마스킹'].map(item=><div key={item}><span className="check-pending">—</span><span>{item}</span><small>미구현</small></div>)}</div><div className="system-alert"><AlertTriangle size={16}/><span>이 화면은 실제 운영 안정성이나 키움 연결을 검증하지 않습니다.</span></div></section></div>}
-        {page==='settings'&&<div className="settings-layout"><section className="panel page-panel"><div className="panel-heading"><div><h2>계산 설정</h2><p>변경 사항은 이 화면의 계산에 적용됩니다.</p></div><SlidersHorizontal size={19} className="muted-icon"/></div><div className="settings-form"><label className="field-label">운용자금 (원)<input type="number" min="0" value={capital} onChange={e=>setCapital(e.target.value)}/><small>포지션 사이징 참고 계산에 사용합니다.</small></label><label className="field-label">위험률 (%)<input type="number" min="0.1" max="10" step="0.1" value={risk} onChange={e=>setRisk(e.target.value)}/><small>운용자금 대비 1회 허용 위험 비율입니다.</small></label><label className="field-label">진입 시스템<select value={system} onChange={e=>setSystem(Number(e.target.value) as 20|55)}><option value={20}>20일 돌파 / 10일 저가 청산</option><option value={55}>55일 돌파 / 20일 저가 청산</option></select><small>대시보드 진입선과 상태 판정에 반영됩니다.</small></label><label className="field-label">최대 Unit<select value={maxUnits} onChange={e=>setMaxUnits(e.target.value)}>{[1,2,3,4,5,6,7,8].map(n=><option key={n} value={n}>{n} Unit</option>)}</select><small>추가매수 기준과 실효 최대 Unit 계산에 사용합니다.</small></label><label className="field-label">차트 기본 기간<select value={period} onChange={e=>setPeriod(e.target.value)}>{['3개월','6개월','1년'].map(p=><option key={p}>{p}</option>)}</select></label><div className="settings-note"><ShieldCheck size={17}/><div><strong>안전 설계</strong><p>설정은 화면 내 계산에만 사용됩니다. 주문 기능, 키움 API 연결, 계좌 연동은 포함되어 있지 않습니다.</p></div></div></div></section><section className="panel page-panel"><div className="panel-heading"><div><h2>시현 옵션</h2><p>Mock UI 확인용</p></div></div><div className="toggle-row"><div><strong>가격 변동 시뮬레이터</strong><p>현재 버전에서는 자동 가격 변동을 수행하지 않습니다.</p></div><button className={'toggle '+(sim?'on':'')} onClick={()=>{setSim(v=>!v);setNotice(!sim?'시뮬레이션 옵션은 표시만 제공하며 가격 변동 로직은 아직 구현되지 않았습니다.':'시뮬레이션 옵션을 껐습니다.')} } aria-label="시뮬레이션 옵션"><span/></button></div><div className="toggle-row"><div><strong>Mock 피드 표시</strong><p>데이터 상태 화면에서 Mock 피드를 켜거나 끌 수 있습니다.</p></div><span className="fixed-label">설정됨</span></div><div className="settings-danger"><AlertTriangle size={17}/><div><strong>주의</strong><p>이 대시보드는 매매 추천 또는 주문 시스템이 아닙니다. 계산 결과는 사용자가 별도로 확인해야 합니다.</p></div></div></section></div>}
-        <footer className="app-footer"><div><span className="footer-brand"><Gauge size={15}/> TURTLE DASHBOARD</span><span>v2.3.1 · REST Quote</span></div><p>시장 데이터 기반 참고 도구 · 실제 주문은 실행되지 않습니다.</p></footer>
-      </main></div>
-    {showAdd&&<div className="modal-backdrop" onClick={()=>setShowAdd(false)}><div className="modal" onClick={e=>e.stopPropagation()}><div className="modal-heading"><div><h2>관심종목 추가</h2><p>샘플 행을 추가합니다. 실제 종목 검색과 연결되지 않습니다.</p></div><button className="icon-button" onClick={()=>setShowAdd(false)}><X size={18}/></button></div><label className="field-label">종목명<input autoFocus value={newName} onChange={e=>setNewName(e.target.value)} placeholder="예: NAVER"/></label><label className="field-label">종목코드 (6자리)<input value={newCode} onChange={e=>setNewCode(e.target.value)} placeholder="예: 035420" maxLength={6}/></label><div className="modal-actions"><button className="outline-button" onClick={()=>setShowAdd(false)}>취소</button><button className="primary-button" onClick={addSymbol}><Plus size={15}/> 샘플 종목 추가</button></div></div></div>}
+    <header className="topbar">
+      <div className="brand-mark">T</div>
+      <div className="brand-copy">
+        <div className="brand-title">Turtle Trading Dashboard <span>v3.0</span></div>
+        <div className="brand-subtitle">LOCAL PRODUCTION · KIWOOM REAL REST DATA</div>
+      </div>
+      <div className={'connection-state ' + (error ? 'is-error' : rows.length ? 'is-good' : '')}>
+        <span className="state-dot" />{statusText}
+      </div>
+      <button className="primary-button" onClick={() => void loadWatchlist()} disabled={loading}>
+        {loading ? '조회 중…' : '실제 데이터 새로고침'}
+      </button>
+    </header>
+
+    <main className="main-content">
+      <section className="notice-bar">
+        <strong>운영 모드</strong>
+        <span>샘플 데이터 사용 안 함</span>
+        <span>·</span>
+        <span>주문/자동매매 기능 없음</span>
+        <span>·</span>
+        <span>PC 로컬 전용</span>
+      </section>
+
+      {error && <div className="error-panel" role="alert"><strong>실제 데이터 조회 실패</strong><span>{error}</span><button onClick={() => void loadWatchlist()}>다시 시도</button></div>}
+
+      <section className="summary-grid">
+        <article className="summary-card">
+          <div className="card-label">키움 API 자격 증명</div>
+          <div className="summary-value">{health?.credentials?.appKeyConfigured && health?.credentials?.appSecretConfigured ? '설정됨' : '확인 필요'}</div>
+          <div className="summary-help">키 값은 화면에 표시하지 않습니다.</div>
+        </article>
+        <article className="summary-card">
+          <div className="card-label">실제 데이터 종목</div>
+          <div className="summary-value">{rows.length}</div>
+          <div className="summary-help">현재 조회에 성공한 종목 수</div>
+        </article>
+        <article className="summary-card">
+          <div className="card-label">마지막 조회</div>
+          <div className="summary-value summary-time">{lastRefresh || '—'}</div>
+          <div className="summary-help">REST 조회 · 60초마다 갱신</div>
+        </article>
+        <article className="summary-card">
+          <div className="card-label">운영 데이터 검증</div>
+          <div className="summary-value">{rows.length && rows.every(row => row.dataQuality.mockFallback === false) ? '실데이터' : '미확인'}</div>
+          <div className="summary-help">응답 확인 전 분석값을 만들지 않습니다.</div>
+        </article>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div><h2>관심종목</h2><p>현재가와 터틀 기준값은 키움 REST API 조회 결과를 사용합니다.</p></div>
+          <div className="add-stock">
+            <input value={customCode} onChange={event => setCustomCode(event.target.value)} inputMode="numeric" maxLength={6} placeholder="종목코드 6자리" aria-label="추가할 종목코드" />
+            <button onClick={() => void addStock()} disabled={loading}>종목 조회</button>
+          </div>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>종목</th><th>현재가</th><th>등락률</th><th>20일 고가</th><th>55일 고가</th><th>N(ATR20)</th><th>터틀 상태</th></tr></thead>
+            <tbody>
+              {rows.map(row => <tr key={row.code} className={selected?.code === row.code ? 'selected-row' : ''} onClick={() => setSelectedCode(row.code)}>
+                <td><button className="stock-link" onClick={event => { event.stopPropagation(); setSelectedCode(row.code) }}><strong>{row.name}</strong><span>{row.code}</span></button></td>
+                <td className="number-cell">{money(row.quote.price)}</td>
+                <td className={'number-cell ' + ((row.quote.changeRate || 0) > 0 ? 'up' : (row.quote.changeRate || 0) < 0 ? 'down' : '')}>{pct(row.quote.changeRate)}</td>
+                <td className="number-cell">{money(row.turtle.system1Entry20High)}</td>
+                <td className="number-cell">{money(row.turtle.system2Entry55High)}</td>
+                <td className="number-cell">{money(row.turtle.nAtr20)}</td>
+                <td><StatusPill status={row.turtle.status} /></td>
+              </tr>)}
+              {!rows.length && <tr><td colSpan={7} className="empty-state">{loading ? '키움 실제 데이터를 조회하고 있습니다…' : '표시할 실제 데이터가 없습니다. 연결 상태와 오류 메시지를 확인하세요.'}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        {failures.length > 0 && <div className="failure-list"><strong>조회 실패 항목</strong>{failures.map(failure => <div key={failure.code}>{failure.code}: {failure.message}</div>)}</div>}
+      </section>
+
+      {selected && <section className="detail-grid">
+        <article className="panel detail-main">
+          <div className="panel-heading"><div><h2>{selected.name} <span className="code-label">{selected.code}</span></h2><p>종목 분석 · 완료된 일봉 {selected.dataQuality.completedDailyBars}개 기준</p></div><StatusPill status={selected.turtle.status} /></div>
+          <div className="price-hero">
+            <div className="hero-price">{money(selected.quote.price)}</div>
+            <div className={'hero-change ' + ((selected.quote.changeRate || 0) > 0 ? 'up' : (selected.quote.changeRate || 0) < 0 ? 'down' : '')}>{pct(selected.quote.changeRate)}</div>
+            <div className="hero-time">조회 시각 {selected.quote.asOf.replace('T', ' ')}</div>
+          </div>
+          <div className="chart-heading">최근 60개 완료 일봉 종가</div>
+          <PriceChart points={selected.chart} />
+          <div className="levels-grid">
+            <div><span>System 1 진입선 · 20일 고가</span><strong>{money(selected.turtle.system1Entry20High)}</strong></div>
+            <div><span>System 2 진입선 · 55일 고가</span><strong>{money(selected.turtle.system2Entry55High)}</strong></div>
+            <div><span>System 1 청산선 · 10일 저가</span><strong>{money(selected.turtle.system1Exit10Low)}</strong></div>
+            <div><span>System 2 청산선 · 20일 저가</span><strong>{money(selected.turtle.system2Exit20Low)}</strong></div>
+            <div><span>N · ATR(20)</span><strong>{money(selected.turtle.nAtr20)}</strong></div>
+            <div><span>마지막 완료 일봉</span><strong>{dateLabel(selected.turtle.lastCompletedBarDate)}</strong></div>
+          </div>
+        </article>
+        <article className="panel">
+          <div className="panel-heading"><div><h2>종목 종합분석</h2><p>규칙 기반 지표 · 확률 예측 아님</p></div></div>
+          <div className="score-wrap"><div className="score-number">{selected.analysis.score}<small>/100</small></div><div><strong>{selected.technical.trend}</strong><p>{selected.analysis.scoreLabel}</p></div></div>
+          <div className="indicator-list">
+            <div><span>20일 이동평균</span><strong>{money(selected.technical.sma20)}</strong></div>
+            <div><span>50일 이동평균</span><strong>{money(selected.technical.sma50)}</strong></div>
+            <div><span>RSI(14)</span><strong>{fmt(selected.technical.rsi14, 1)}</strong></div>
+            <div><span>MACD / Signal</span><strong>{fmt(selected.technical.macd, 2)} / {fmt(selected.technical.macdSignal, 2)}</strong></div>
+            <div><span>20일 평균 대비 거래량</span><strong>{selected.technical.volumeRatio20 == null ? '—' : fmt(selected.technical.volumeRatio20, 2) + '배'}</strong></div>
+          </div>
+          <div className="limitation-note">{selected.analysis.limitations.map(item => <p key={item}>{item}</p>)}</div>
+        </article>
+      </section>}
+
+      <footer className="footer-note">
+        <div><strong>데이터 출처</strong> {rows.length ? '키움증권 운영 REST API' : '연결 확인 전'} · <strong>모드</strong> PRODUCTION</div>
+        <div>API 연결, 일봉 필드, 수정주가 및 지표 계산 검증이 완료되기 전에는 매매 판단에 사용하지 마세요.</div>
+      </footer>
+    </main>
   </div>
 }

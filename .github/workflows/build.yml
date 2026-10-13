@@ -2,7 +2,7 @@ name: Build check
 
 on:
   push:
-    branches: [main]
+    branches: [main, v3-local-production]
   pull_request:
     branches: [main]
 
@@ -14,6 +14,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: npm install
       - run: npm run build
       - run: npm run build:demo
+      - run: python -m compileall -q backend tests
+      - run: python -m unittest discover -s tests

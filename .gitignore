@@ -4,7 +4,14 @@ dist-demo/
 .env
 .env.*
 *.sqlite
+*.sqlite3
 *.db
+*.db-wal
+*.db-shm
 logs/
 backups/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
 .DS_Store
