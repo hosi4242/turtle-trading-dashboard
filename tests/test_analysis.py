@@ -71,6 +71,21 @@ class StockAnalysisTests(unittest.TestCase):
         expected = 100.0 if average_loss == 0 else 100.0 - (100.0 / (1.0 + average_gain / average_loss))
         self.assertAlmostEqual(result["technical"]["rsi14"], expected, places=8)
 
+    def test_rejects_insufficient_history(self) -> None:
+        with self.assertRaisesRegex(ValueError, "최소 55개"):
+            analyze_stock(self.quote, self.bars[:54])
+
+    def test_rejects_invalid_quote_price(self) -> None:
+        for price in (0, -1, float("nan"), float("inf")):
+            with self.subTest(price=price), self.assertRaisesRegex(ValueError, "현재가"):
+                analyze_stock({**self.quote, "price": price}, self.bars)
+
+    def test_rejects_invalid_ohlc(self) -> None:
+        bars = [dict(row) for row in self.bars]
+        bars[-1]["high"] = bars[-1]["low"] - 1
+        with self.assertRaisesRegex(ValueError, "고가가 저가보다"):
+            analyze_stock(self.quote, bars)
+
     def test_indicators_are_numeric_and_score_is_not_probability(self) -> None:
         result = analyze_stock(self.quote, self.bars)
         self.assertIsInstance(result["technical"]["rsi14"], float)
