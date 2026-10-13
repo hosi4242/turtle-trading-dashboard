@@ -19,6 +19,16 @@ type QuoteResult = {
   mode: "REAL";
 };
 
+class TokenRequestError extends Error {
+  constructor(
+    readonly httpStatus: number,
+    readonly providerCode: string | number | null,
+    readonly providerMessage: string,
+  ) {
+    super("TOKEN_REQUEST_FAILED");
+  }
+}
+
 type CachedToken = { value: string; expiresAt: number };
 let cachedToken: CachedToken | undefined;
 const quoteCache = new Map<string, { value: QuoteResult; expiresAt: number }>();
@@ -60,14 +70,17 @@ async function getAccessToken(env: Env): Promise<string> {
   try {
     payload = await response.json() as Record<string, unknown>;
   } catch {
-    throw new Error("TOKEN_REQUEST_FAILED");
+    throw new TokenRequestError(response.status, null, "NON_JSON_RESPONSE");
   }
 
   const token = typeof payload.token === "string"
     ? payload.token
     : typeof payload.access_token === "string" ? payload.access_token : "";
-  if (!response.ok || !token || (payload.return_code !== undefined && Number(payload.return_code) !== 0)) {
-    throw new Error("TOKEN_REQUEST_FAILED");
+  const rawCode = payload.return_code;
+  const providerCode = typeof rawCode === "string" || typeof rawCode === "number" ? rawCode : null;
+  const providerMessage = typeof payload.return_msg === "string" ? payload.return_msg.slice(0, 200) : "";
+  if (!response.ok || !token || (rawCode !== undefined && Number(rawCode) !== 0)) {
+    throw new TokenRequestError(response.status, providerCode, providerMessage || "TOKEN_OR_PROVIDER_ERROR");
   }
 
   const expiryText = typeof payload.expires_dt === "string" ? payload.expires_dt : "";
@@ -153,9 +166,21 @@ async function getQuote(request: Request, env: Env): Promise<Response> {
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "SECRETS_NOT_CONFIGURED") return json({ error: "CLOUDFLARE_SECRETS_NOT_CONFIGURED" }, 503);
-    if (message === "TOKEN_REQUEST_FAILED") {
+    if (error instanceof TokenRequestError) {
       cachedToken = undefined;
-      return json({ error: "KIWOOM_TOKEN_REQUEST_FAILED" }, 502);
+      const redact = (value: string | undefined) => value
+        ? error.providerMessage.split(value).join("[redacted]")
+        : error.providerMessage;
+      const safeMessage = redact(env.KIWOOM_APP_KEY)
+        .split(env.KIWOOM_APP_SECRET ?? "\u0000").join("[redacted]")
+        .replace(/[\\r\\n\\t]/g, " ")
+        .slice(0, 160);
+      return json({
+        error: "KIWOOM_TOKEN_REQUEST_FAILED",
+        providerHttpStatus: error.httpStatus,
+        providerCode: error.providerCode,
+        providerMessage: safeMessage || null,
+      }, 502);
     }
     return json({ error: "KIWOOM_CONNECTION_FAILED" }, 502);
   }
