@@ -241,13 +241,13 @@ async function analyze(code: string, env: Env): Promise<Record<string, unknown>>
   const e20=Math.max(...highs.slice(-20)), e55=Math.max(...highs.slice(-55));
   const x10=Math.min(...lows.slice(-10)), x20=Math.min(...lows.slice(-20));
   const s20=sma(closes,20), s50=sma(closes,50), mline=ema(closes,12).map((x,i)=>x-ema(closes,26)[i]);
-  const macd=mline[mline.length-1], sig=ema(mline,9).at(-1)!;
-  const avol=sma(volumes,20), vr=avol?volumes.at(-1)!/avol:null, r=rsi(closes);
+  const macd=mline[mline.length-1], sig=ema(mline,9)[mline.length-1];
+  const avol=sma(volumes,20), vr=avol?volumes[volumes.length-1]/avol:null, r=rsi(closes);
   const trend=s20!==null&&s50!==null&&quote.price>s20&&s20>s50?"상승 추세":s20!==null&&s50!==null&&quote.price<s20&&s20<s50?"하락 추세":"혼조";
   const parts=[s20!==null&&quote.price>s20?1:-1,s20!==null&&s50!==null&&s20>s50?1:-1,macd>sig?1:-1,r!==null&&r>=45&&r<=70?1:r!==null&&r>75?-1:0,vr!==null&&vr>=1.2?1:0];
   const score=Math.round((parts.reduce((a,b)=>a+b,0)+parts.length)/(2*parts.length)*100);
   const asOf=quote.asOf;
-  return {code,name:quote.name,quote,turtle:{system1Entry20High:e20,system2Entry55High:e55,system1Exit10Low:x10,system2Exit20Low:x20,nAtr20:atr,lastCompletedBarDate:bars.at(-1)!.date,historyBars:bars.length,status:quote.price>=e20?"ENTRY_READY":"WATCHING",statusBasis:"실제 현재가와 완료된 일봉 20일 고가 비교"},
+  return {code,name:quote.name,quote,turtle:{system1Entry20High:e20,system2Entry55High:e55,system1Exit10Low:x10,system2Exit20Low:x20,nAtr20:atr,lastCompletedBarDate:bars[bars.length-1].date,historyBars:bars.length,status:quote.price>=e20?"ENTRY_READY":"WATCHING",statusBasis:"실제 현재가와 완료된 일봉 20일 고가 비교"},
     chart:bars.slice(-60).map(b=>({date:\`\${b.date.slice(0,4)}-\${b.date.slice(4,6)}-\${b.date.slice(6)}\`,close:b.close})),
     technical:{trend,sma20:s20,sma50:s50,rsi14:r,macd,macdSignal:sig,atr20:atr,volumeAverage20:avol,volumeRatio20:vr},
     analysis:{score,scoreLabel:"규칙 기반 참고 점수(확률 아님)",horizons:{SHORT:"1~5거래일",MEDIUM:"2~4주",LONG:"3~12개월"},limitations:["수급·뉴스·공시·실적 데이터는 연결하지 않았습니다.","이 점수는 상승 확률이 아니며 매수·매도 권고가 아닙니다."]},
