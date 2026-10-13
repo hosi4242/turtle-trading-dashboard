@@ -61,7 +61,15 @@ def api_error(exc: KiwoomError) -> HTTPException:
 async def fetch_analysis(code: str) -> dict[str, Any]:
     quote = await client.get_quote(code)
     bars = await client.get_daily_bars(code)
-    return analyze_stock(quote, bars)
+    try:
+        return analyze_stock(quote, bars)
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        # Treat malformed provider data as a data-quality failure, not an
+        # unhandled 500 or a fabricated signal. Do not expose raw payloads.
+        raise KiwoomError(
+            "MARKET_DATA_INVALID",
+            "키움 시세 또는 일봉 데이터가 분석 조건을 충족하지 못했습니다. 데이터 형식과 완료된 일봉을 확인하세요.",
+        ) from exc
 
 
 @app.get("/api/health")
