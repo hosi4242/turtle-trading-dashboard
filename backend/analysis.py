@@ -14,9 +14,13 @@ def _rsi(values: list[float], period: int = 14) -> float | None:
     if len(values) <= period:
         return None
     changes = [values[i] - values[i - 1] for i in range(1, len(values))]
-    gains = [max(change, 0.0) for change in changes[-period:]]
-    losses = [max(-change, 0.0) for change in changes[-period:]]
-    average_gain, average_loss = mean(gains), mean(losses)
+    gains = [max(change, 0.0) for change in changes]
+    losses = [max(-change, 0.0) for change in changes]
+    average_gain = mean(gains[:period])
+    average_loss = mean(losses[:period])
+    for gain, loss in zip(gains[period:], losses[period:]):
+        average_gain = ((average_gain * (period - 1)) + gain) / period
+        average_loss = ((average_loss * (period - 1)) + loss) / period
     if average_loss == 0:
         return 100.0 if average_gain else 50.0
     relative_strength = average_gain / average_loss
@@ -49,9 +53,8 @@ def analyze_stock(quote: dict[str, Any], bars: list[dict[str, Any]]) -> dict[str
             abs(float(bar["low"]) - previous_close),
         ))
 
-    # Turtle N uses Wilder-smoothed ATR, not a simple average of only the
-    # most recent 20 true ranges. Seed with the first 20 observations, then
-    # apply Wilder's recursive smoothing through the latest completed bar.
+    # Turtle N uses Wilder-smoothed ATR. Seed with the first 20 observations,
+    # then apply Wilder's recursive smoothing through the latest completed bar.
     atr_period = 20
     atr20 = mean(true_ranges[:atr_period])
     for true_range in true_ranges[atr_period:]:
