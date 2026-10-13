@@ -66,6 +66,21 @@ const money = (value: number | null | undefined) => value == null ? '—' : fmt(
 const pct = (value: number | null | undefined) => value == null ? '—' : (value > 0 ? '+' : '') + fmt(value, 2) + '%'
 const dateLabel = (value?: string) => value ? value.slice(0, 10).replace(/-/g, '.') : '—'
 
+const DEFAULT_CODES = ['005930', '000660', '005380']
+function savedCodes(): string[] {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem('turtle-v3-watchlist') || 'null')
+    if (Array.isArray(parsed)) {
+      const codes = parsed.filter((code): code is string => typeof code === 'string' && /^\\d{6}$/.test(code))
+      return [...new Set(codes)].slice(0, 10).length ? [...new Set(codes)].slice(0, 10) : DEFAULT_CODES
+    }
+  } catch { /* use defaults when browser storage is unavailable */ }
+  return DEFAULT_CODES
+}
+function storeCodes(codes: string[]) {
+  try { window.localStorage.setItem('turtle-v3-watchlist', JSON.stringify([...new Set(codes)].slice(0, 10))) } catch { /* storage may be disabled */ }
+}
+
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { headers: { Accept: 'application/json', ...(init?.headers || {}) }, ...init })
   const body = await response.json().catch(() => ({}))
@@ -120,7 +135,7 @@ export default function App() {
     try {
       const [healthResult, listResult] = await Promise.all([
         api<Health>('/api/health'),
-        api<{ items: StockAnalysis[]; failures: ApiFailure[] }>('/api/watchlist')
+        api<{ items: StockAnalysis[]; failures: ApiFailure[] }>(`/api/watchlist?codes=${savedCodes().join(',')}`)
       ])
       setHealth(healthResult)
       setRows(listResult.items)
@@ -154,6 +169,7 @@ export default function App() {
     try {
       const stock = await api<StockAnalysis>('/api/watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })
       setRows(previous => [stock, ...previous.filter(item => item.code !== code)])
+      storeCodes([code, ...savedCodes().filter(saved => saved !== code)])
       setSelectedCode(code)
       setCustomCode('')
       setLastRefresh(new Date().toLocaleString('ko-KR', { hour12: false }))
@@ -171,7 +187,7 @@ export default function App() {
       <div className="brand-mark">T</div>
       <div className="brand-copy">
         <div className="brand-title">Turtle Trading Dashboard <span>v3.0</span></div>
-        <div className="brand-subtitle">LOCAL PRODUCTION · KIWOOM REAL REST DATA</div>
+        <div className="brand-subtitle">CLOUDFLARE PRODUCTION · KIWOOM REAL REST DATA</div>
       </div>
       <div className={'connection-state ' + (error ? 'is-error' : rows.length ? 'is-good' : '')}>
         <span className="state-dot" />{statusText}
@@ -188,7 +204,7 @@ export default function App() {
         <span>·</span>
         <span>주문/자동매매 기능 없음</span>
         <span>·</span>
-        <span>PC 로컬 전용</span>
+        <span>개인용 조회 대시보드</span>
       </section>
 
       {error && <div className="error-panel" role="alert"><strong>실제 데이터 조회 실패</strong><span>{error}</span><button onClick={() => void loadWatchlist()}>다시 시도</button></div>}
