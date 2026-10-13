@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import isfinite
 from statistics import mean
 from typing import Any
 
@@ -38,11 +39,21 @@ def _ema(values: list[float], period: int) -> list[float]:
 
 
 def analyze_stock(quote: dict[str, Any], bars: list[dict[str, Any]]) -> dict[str, Any]:
+    # Guard the public analysis function even though the REST adapter already
+    # enforces history length. Never manufacture signals from incomplete input.
+    if len(bars) < 55:
+        raise ValueError("터틀 기준값 계산에는 완료된 일봉이 최소 55개 필요합니다.")
     closes = [float(bar["close"]) for bar in bars]
     highs = [float(bar["high"]) for bar in bars]
     lows = [float(bar["low"]) for bar in bars]
     volumes = [float(bar["volume"]) for bar in bars]
     current_price = float(quote["price"])
+    if not isfinite(current_price) or current_price <= 0:
+        raise ValueError("현재가는 유효한 양수여야 합니다.")
+    if any(not isfinite(value) for value in closes + highs + lows + volumes):
+        raise ValueError("일봉 데이터에 유효하지 않은 숫자가 포함되어 있습니다.")
+    if any(high < low for high, low in zip(highs, lows)):
+        raise ValueError("일봉 고가가 저가보다 낮은 데이터가 포함되어 있습니다.")
 
     true_ranges: list[float] = []
     for index, bar in enumerate(bars):
