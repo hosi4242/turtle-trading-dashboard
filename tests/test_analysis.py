@@ -39,7 +39,23 @@ class StockAnalysisTests(unittest.TestCase):
         self.assertEqual(result["turtle"]["system1Exit10Low"], min(row["low"] for row in self.bars[-10:]))
         self.assertEqual(result["turtle"]["status"], "ENTRY_READY")
 
-    def test_indicators_are_numeric_and_score_is_not_probability(self) -> None:
+    def test_atr_uses_wilder_smoothing(self) -> None:
+        result = analyze_stock(self.quote, self.bars)
+        true_ranges = []
+        for index, bar in enumerate(self.bars):
+            previous_close = self.bars[index - 1]["close"] if index else bar["close"]
+            true_ranges.append(max(
+                bar["high"] - bar["low"],
+                abs(bar["high"] - previous_close),
+                abs(bar["low"] - previous_close),
+            ))
+        expected = sum(true_ranges[:20]) / 20
+        for true_range in true_ranges[20:]:
+            expected = ((expected * 19) + true_range) / 20
+        self.assertAlmostEqual(result["turtle"]["nAtr20"], expected, places=8)
+        self.assertAlmostEqual(result["technical"]["atr20"], expected, places=8)
+
+    def test_indicators_are_numeric_and_score_is_not_probability(self) -> None
         result = analyze_stock(self.quote, self.bars)
         self.assertIsInstance(result["technical"]["rsi14"], float)
         self.assertGreaterEqual(result["analysis"]["score"], 0)

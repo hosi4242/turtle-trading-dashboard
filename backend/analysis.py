@@ -49,7 +49,13 @@ def analyze_stock(quote: dict[str, Any], bars: list[dict[str, Any]]) -> dict[str
             abs(float(bar["low"]) - previous_close),
         ))
 
-    atr20 = mean(true_ranges[-20:])
+    # Turtle N uses Wilder-smoothed ATR, not a simple average of only the
+    # most recent 20 true ranges. Seed with the first 20 observations, then
+    # apply Wilder's recursive smoothing through the latest completed bar.
+    atr_period = 20
+    atr20 = mean(true_ranges[:atr_period])
+    for true_range in true_ranges[atr_period:]:
+        atr20 = ((atr20 * (atr_period - 1)) + true_range) / atr_period
     entry20 = max(highs[-20:])
     entry55 = max(highs[-55:])
     exit10 = min(lows[-10:])
