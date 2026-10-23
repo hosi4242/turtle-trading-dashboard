@@ -66,7 +66,7 @@ const fmt = (value: number | null | undefined, digits = 0) =>
   value == null || !Number.isFinite(value) ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: digits, minimumFractionDigits: digits })
 const money = (value: number | null | undefined) => value == null ? '—' : fmt(value) + '원'
 const pct = (value: number | null | undefined) => value == null ? '—' : (value > 0 ? '+' : '') + fmt(value, 2) + '%'
-const dateLabel = (value?: string) => value ? value.slice(0, 10).replace(/-/g, '.') : '—'
+const dateLabel = (value?: string) => value ? (/^\\d{8}$/.test(value) ? value.replace(/^(\\d{4})(\\d{2})(\\d{2})$/, '$1.$2.$3') : value.slice(0, 10).replace(/-/g, '.')) : '—'
 
 const DEFAULT_CODES = ['005930', '000660', '005380']
 function savedCodes(): string[] {
@@ -88,7 +88,7 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
     const detail = body?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || detail?.code || 'API 요청에 실패했습니다.'
+    const message = typeof detail === 'string' ? detail : detail?.message || detail?.code || body?.message || body?.error || 'API 요청에 실패했습니다.'
     throw new Error(message)
   }
   return body as T
