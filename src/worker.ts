@@ -278,6 +278,56 @@ async function analyze(code: string, env: Env): Promise<Record<string, unknown>>
     analysis:{score,scoreLabel:"규칙 기반 참고 점수(확률 아님)",horizons:{SHORT:"1~5거래일",MEDIUM:"2~4주",LONG:"3~12개월"},limitations:["수급·뉴스·공시·실적 데이터는 연결하지 않았습니다.","이 점수는 상승 확률이 아니며 매수·매도 권고가 아닙니다."]},
     dataQuality:{source:"KIWOOM_REAL_REST",mode:"PRODUCTION",asOf,completedDailyBars:bars.length,mockFallback:false}};
 }
+
+type InvestorSide = { buy: number | null; sell: number | null; net: number | null };
+type InvestorFlow = { code: string; date: string; source: "KIWOOM_REAL_REST"; foreign: InvestorSide; institution: InvestorSide; unit: "백만원" };
+const investorCache = new Map<string, { value: InvestorFlow; expiresAt: number }>();
+async function investorRequest(token: string, code: string, tradeType: "0" | "1" | "2"): Promise<Record<string, unknown>> {
+  const response = await fetch(`${KIWOOM_API}/api/dostk/stkinfo`, {
+    method: "POST",
+    headers: { "content-type": "application/json;charset=UTF-8", authorization: `Bearer ${token}`, "api-id": "ka10059", "cont-yn": "N", "next-key": "" },
+    body: JSON.stringify({ dt: new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" }).replace(/-/g, ""), stk_cd: code, amt_qty_tp: "1", trde_tp: tradeType, unit_tp: "1" }),
+  });
+  let payload: Record<string, unknown>;
+  try { payload = await response.json() as Record<string, unknown>; } catch { throw new Error("INVESTOR_RESPONSE_INVALID"); }
+  if (!response.ok || (payload.return_code !== undefined && Number(payload.return_code) !== 0)) throw new Error("INVESTOR_REQUEST_FAILED");
+  return payload;
+}
+function investorRows(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const rows = payload.stk_invsr_orgn;
+  return Array.isArray(rows) ? rows.filter((row): row is Record<string, unknown> => !!row && typeof row === "object") : [];
+}
+async function getInvestorFlow(code: string, env: Env): Promise<InvestorFlow> {
+  if (!ALLOWED_CODES.has(code)) throw new Error("UNSUPPORTED_SYMBOL");
+  const cached = investorCache.get(code);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const token = await getAccessToken(env);
+  // Keep the three requests sequential to respect API rate limits.
+  const netPayload = await investorRequest(token, code, "0");
+  const buyPayload = await investorRequest(token, code, "1");
+  const sellPayload = await investorRequest(token, code, "2");
+  const netRow = investorRows(netPayload)[0], buyRow = investorRows(buyPayload)[0], sellRow = investorRows(sellPayload)[0];
+  if (!netRow) throw new Error("INVESTOR_DATA_UNAVAILABLE");
+  const val = (row: Record<string, unknown> | undefined, key: string) => row ? numberField(row[key]) : null;
+  const result: InvestorFlow = {
+    code, date: String(netRow.dt ?? netRow.date ?? ""), source: "KIWOOM_REAL_REST", unit: "백만원",
+    foreign: { buy: val(buyRow, "frgnr_invsr"), sell: val(sellRow, "frgnr_invsr"), net: val(netRow, "frgnr_invsr") },
+    institution: { buy: val(buyRow, "orgn"), sell: val(sellRow, "orgn"), net: val(netRow, "orgn") },
+  };
+  investorCache.set(code, { value: result, expiresAt: Date.now() + 60_000 });
+  return result;
+}
+async function getInvestors(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "GET") return json({ error: "METHOD_NOT_ALLOWED" }, 405);
+  const code = (new URL(request.url).searchParams.get("code") ?? "").trim();
+  if (!ALLOWED_CODES.has(code)) return json({ error: "UNSUPPORTED_SYMBOL", allowedCodes: [...ALLOWED_CODES] }, 400);
+  try { return json(await getInvestorFlow(code, env)); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : "INVESTOR_REQUEST_FAILED";
+    return json({ error: message, source: "KIWOOM_REAL_REST" }, message === "SECRETS_NOT_CONFIGURED" ? 503 : 502);
+  }
+}
+
 function allowedOrigin(request: Request): boolean {
   const origin=request.headers.get("Origin"); if(!origin) return true;
   try { return new URL(origin).host===new URL(request.url).host; } catch { return false; }
@@ -289,6 +339,7 @@ export default {
    if(path==="/api/health") return json({application:"Turtle Trading Dashboard",version:"3.0.0",mode:"PRODUCTION",backend:"cloudflare-worker",credentials:{appKeyConfigured:Boolean(env.KIWOOM_APP_KEY?.trim()),appSecretConfigured:Boolean(env.KIWOOM_APP_SECRET?.trim())},mockFallback:false,ordersEnabled:false,database:"browser-localStorage"});
    if(path==="/api/kiwoom/config-status") return json({worker:"turtle-trading-dashboard",appKeyConfigured:Boolean(env.KIWOOM_APP_KEY?.trim()),appSecretConfigured:Boolean(env.KIWOOM_APP_SECRET?.trim())});
    if(path==="/api/kiwoom/quote") return getQuote(request,env);
+   if(path==="/api/kiwoom/investors") return getInvestors(request,env);
    if(path==="/api/watchlist") {
      if(request.method==="GET") {
        const codes=(url.searchParams.get("codes")??"005930,000660,005380").split(",").map(x=>x.trim()).filter((x,i,a)=>/^\d{6}$/.test(x)&&a.indexOf(x)===i).slice(0,10);

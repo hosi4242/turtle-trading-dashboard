@@ -50,6 +50,8 @@ type StockAnalysis = {
     mockFallback: boolean
   }
 }
+type InvestorSide = { buy: number | null; sell: number | null; net: number | null };
+type InvestorFlow = { code: string; date: string; source: string; unit: string; foreign: InvestorSide; institution: InvestorSide }
 type ApiFailure = { code: string; error: string; message: string }
 type Health = {
   version: string
@@ -64,7 +66,7 @@ const fmt = (value: number | null | undefined, digits = 0) =>
   value == null || !Number.isFinite(value) ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: digits, minimumFractionDigits: digits })
 const money = (value: number | null | undefined) => value == null ? '—' : fmt(value) + '원'
 const pct = (value: number | null | undefined) => value == null ? '—' : (value > 0 ? '+' : '') + fmt(value, 2) + '%'
-const dateLabel = (value?: string) => value ? value.slice(0, 10).replace(/-/g, '.') : '—'
+const dateLabel = (value?: string) => value ? (/^\\d{8}$/.test(value) ? value.replace(/^(\\d{4})(\\d{2})(\\d{2})$/, '$1.$2.$3') : value.slice(0, 10).replace(/-/g, '.')) : '—'
 
 const DEFAULT_CODES = ['005930', '000660', '005380']
 function savedCodes(): string[] {
@@ -86,7 +88,7 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
     const detail = body?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message || detail?.code || 'API 요청에 실패했습니다.'
+    const message = typeof detail === 'string' ? detail : detail?.message || detail?.code || body?.message || body?.error || 'API 요청에 실패했습니다.'
     throw new Error(message)
   }
   return body as T
@@ -126,6 +128,9 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [lastRefresh, setLastRefresh] = useState('')
+  const [investorFlow, setInvestorFlow] = useState<InvestorFlow | null>(null)
+  const [investorLoading, setInvestorLoading] = useState(false)
+  const [investorError, setInvestorError] = useState('')
 
   const selected = useMemo(() => rows.find(row => row.code === selectedCode) || rows[0] || null, [rows, selectedCode])
 
@@ -179,6 +184,21 @@ export default function App() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (!selectedCode) return
+    let cancelled = false
+    setInvestorLoading(true)
+    setInvestorError('')
+    api<InvestorFlow>(`/api/kiwoom/investors?code=${encodeURIComponent(selectedCode)}`)
+      .then(result => { if (!cancelled) setInvestorFlow(result) })
+      .catch(e => { if (!cancelled) { setInvestorFlow(null); setInvestorError(e instanceof Error ? e.message : '투자자 수급 조회에 실패했습니다.') } })
+      .finally(() => { if (!cancelled) setInvestorLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedCode])
+
+  const flowMoney = (value: number | null) => value == null ? '—' : (value > 0 ? '+' : '') + fmt(value / 100, 2) + '억'
+  const flowStatus = (value: number | null) => value == null ? '확인 불가' : value > 0 ? '순매수' : value < 0 ? '순매도' : '중립'
 
   const statusText = error ? '데이터 확인 필요' : rows.length ? '실제 API 응답 확인됨' : '연결 확인 중'
 
@@ -292,6 +312,19 @@ export default function App() {
           <div className="limitation-note">{selected.analysis.limitations.map(item => <p key={item}>{item}</p>)}</div>
         </article>
       </section>}
+
+      <section className="panel investor-panel">
+        <div className="panel-heading"><div><h2>외국인 · 기관 수급 분석</h2><p>{selected ? selected.name + ' (' + selected.code + ')' : '관심종목'} · 키움증권 투자자별 매매동향 API</p></div><span className="status-pill">{investorLoading ? '수급 조회 중…' : investorFlow ? '실제 API 응답' : '데이터 확인 필요'}</span></div>
+        {investorError && <div className="failure-list" role="status">수급 데이터를 가져오지 못했습니다: {investorError}. API 권한 또는 거래일 데이터 여부를 확인해 주세요.</div>}
+        {investorFlow && investorFlow.code === selectedCode ? <>
+          <div className="investor-date">기준일 {dateLabel(investorFlow.date)} · 금액 단위: 억원 (키움 API 백만원 응답을 환산)</div>
+          <div className="investor-grid">
+            <article className="investor-card"><div className="investor-title">외국인</div><div className="investor-stat"><span>매수</span><strong>{flowMoney(investorFlow.foreign.buy)}</strong></div><div className="investor-stat"><span>매도</span><strong>{flowMoney(investorFlow.foreign.sell)}</strong></div><div className="investor-net"><span>순매수</span><strong className={(investorFlow.foreign.net ?? 0) > 0 ? 'up' : (investorFlow.foreign.net ?? 0) < 0 ? 'down' : ''}>{flowMoney(investorFlow.foreign.net)}</strong><em>{flowStatus(investorFlow.foreign.net)}</em></div></article>
+            <article className="investor-card"><div className="investor-title">기관계</div><div className="investor-stat"><span>매수</span><strong>{flowMoney(investorFlow.institution.buy)}</strong></div><div className="investor-stat"><span>매도</span><strong>{flowMoney(investorFlow.institution.sell)}</strong></div><div className="investor-net"><span>순매수</span><strong className={(investorFlow.institution.net ?? 0) > 0 ? 'up' : (investorFlow.institution.net ?? 0) < 0 ? 'down' : ''}>{flowMoney(investorFlow.institution.net)}</strong><em>{flowStatus(investorFlow.institution.net)}</em></div></article>
+          </div>
+          <div className="investor-footnote">수급은 매매 참고용 보조 지표이며 주가 방향을 보장하지 않습니다. 매수·매도·순매수는 키움 API 응답을 기준으로 표시합니다.</div>
+        </> : !investorLoading && !investorError && <div className="empty-state">표시할 투자자 수급 데이터가 없습니다.</div>}
+      </section>
 
       <footer className="footer-note">
         <div><strong>데이터 출처</strong> {rows.length ? '키움증권 운영 REST API' : '연결 확인 전'} · <strong>모드</strong> PRODUCTION</div>
