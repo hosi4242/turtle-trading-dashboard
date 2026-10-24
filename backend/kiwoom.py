@@ -197,6 +197,68 @@ class KiwoomClient:
         return completed[-260:]
 
 
+    async def get_investor_flow(self, code: str) -> dict[str, Any]:
+        """Return latest available daily foreign/institution investor flow.
+
+        ka10059 uses a separate trde_tp for net-buy, buy, and sell amounts.
+        Values are requested as money and converted from million KRW by the UI.
+        """
+        for offset in range(0, 11):
+            target_day = date.today() - timedelta(days=offset)
+            day_text = target_day.strftime("%Y%m%d")
+            results: dict[str, dict[str, Any]] = {}
+            rows_for_day: list[dict[str, Any]] = []
+            for trade_type in ("0", "1", "2"):
+                payload = await self._post(
+                    "ka10059",
+                    "/api/dostk/stkinfo",
+                    {
+                        "dt": day_text,
+                        "stk_cd": code,
+                        "amt_qty_tp": "1",
+                        "trde_tp": trade_type,
+                        "unit_tp": "1000",
+                    },
+                )
+                rows = payload.get("stk_invsr_orgn")
+                if isinstance(rows, list) and rows:
+                    row = next((item for item in rows if isinstance(item, dict) and str(item.get("dt", "")) == day_text), None)
+                    if row is None:
+                        row = next((item for item in rows if isinstance(item, dict)), None)
+                    if row:
+                        results[trade_type] = row
+                        rows_for_day.append(row)
+            if not rows_for_day:
+                continue
+
+            def investor_value(trade_type: str, field: str) -> float | None:
+                row = results.get(trade_type)
+                return parse_number(row.get(field)) if row else None
+
+            # If provider returns a date row but omits one trade type, preserve
+            # that field as null instead of manufacturing a zero.
+            return {
+                "code": code,
+                "date": day_text,
+                "source": "KIWOOM_REAL_REST",
+                "unit": "백만원",
+                "foreign": {
+                    "net": investor_value("0", "frgnr_invsr"),
+                    "buy": investor_value("1", "frgnr_invsr"),
+                    "sell": investor_value("2", "frgnr_invsr"),
+                },
+                "institution": {
+                    "net": investor_value("0", "orgn"),
+                    "buy": investor_value("1", "orgn"),
+                    "sell": investor_value("2", "orgn"),
+                },
+            }
+        raise KiwoomError(
+            "INVESTOR_DATA_UNAVAILABLE",
+            "최근 10일 내 조회 가능한 투자자 수급 데이터가 없습니다. 거래일과 키움 API 권한을 확인하세요.",
+        )
+
+
 def parse_number(value: Any, absolute: bool = False) -> float | None:
     if value is None or value == "":
         return None

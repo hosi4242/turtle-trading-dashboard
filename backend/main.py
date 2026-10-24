@@ -114,6 +114,16 @@ async def stock_analysis(code: str) -> dict[str, Any]:
         raise api_error(exc) from exc
 
 
+
+@app.get("/api/kiwoom/investors")
+async def investor_flow(code: str) -> dict[str, Any]:
+    code = safe_code(code)
+    try:
+        return await client.get_investor_flow(code)
+    except KiwoomError as exc:
+        raise api_error(exc) from exc
+
+
 @app.post("/api/watchlist")
 async def add_watchlist_stock(request: AddStockRequest) -> dict[str, Any]:
     code = safe_code(request.code)
